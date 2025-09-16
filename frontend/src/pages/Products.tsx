@@ -1,19 +1,24 @@
 import React, { useEffect,useState, useMemo } from 'react';
 import Papa from "papaparse";
-import { Search, Filter, Grid, X, ChevronDown, Package, Sparkles } from 'lucide-react';
+import { Search, Filter, Grid, X, ChevronDown, Package, Sparkles, Plus, User, LogOut } from 'lucide-react';
 import { useSmootherScrolling } from '@/hooks/useSmootherScrolling';
 import ProductCard from '@/components/ProductCard';
+import AddProductForm from '@/components/AddProductForm';
+import AuthModal from '@/components/AuthModal';
 import {  categories, popularTags } from '@/data/products';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
+import { useAuth } from '@/contexts/AuthContext';
+import { apiService, Product } from '@/services/api';
 
 const PRODUCTS_PER_PAGE = 20;
 
 const Products = () => {
   useSmootherScrolling();
+  const { user, isAuthenticated, logout } = useAuth();
   
   // Initialize all states with clean defaults
   const [searchQuery, setSearchQuery] = useState('');
@@ -21,53 +26,88 @@ const Products = () => {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [showFilters, setShowFilters] = useState(false);
-  const [products, setProducts] = useState([]);
+  const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [showAddProduct, setShowAddProduct] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [useBackendData, setUseBackendData] = useState(false);
 
- useEffect(() => {
-  setIsLoading(true);
-  fetch("/products.csv") // Ensure the filename is correct
-    .then((response) => response.text())
-    .then((csvText) => {
-      Papa.parse(csvText, {
-        header: true,
-        skipEmptyLines: true,
-        complete: (result) => {
-          const parsedProducts = result.data.map((product) => ({
-            ...product,
-            original_price: Number(product.original_price) || 0,
-            discounted_price: Number(product.discounted_price) || 0,
-            tags: product.tags
-              ? product.tags.split(",").map((tag) => tag.trim())
-              : [],
-            images: product.images
-              ? product.images.split(",").map((img) => img.trim())
-              : [],
+  // Fetch products from backend or CSV
+  useEffect(() => {
+    const fetchProducts = async () => {
+      setIsLoading(true);
+      
+      if (useBackendData) {
+        try {
+          const backendProducts = await apiService.getProducts();
+          // Transform backend products to match frontend format
+          const transformedProducts = backendProducts.map((product) => ({
+            id: product._id || product.id,
+            name: product.name,
+            description: product.description,
+            original_price: product.price,
+            discounted_price: product.price,
+            category: product.category || 'General',
+            tags: product.tags || [],
+            images: product.image ? [product.image] : [],
           }));
+          setProducts(transformedProducts);
+        } catch (error) {
+          console.error("Error fetching from backend:", error);
+          // Fallback to CSV if backend fails
+          fetchCSVData();
+        }
+      } else {
+        fetchCSVData();
+      }
+    };
 
-          // Filter out invalid products
-          const validProducts = parsedProducts.filter(
-            (product) =>
-              product.name &&
-              product.description &&
-              product.category &&
-              product.original_price > 0
-          );
+    const fetchCSVData = () => {
+      fetch("/products.csv")
+        .then((response) => response.text())
+        .then((csvText) => {
+          Papa.parse(csvText, {
+            header: true,
+            skipEmptyLines: true,
+            complete: (result) => {
+              const parsedProducts = result.data.map((product) => ({
+                ...product,
+                original_price: Number(product.original_price) || 0,
+                discounted_price: Number(product.discounted_price) || 0,
+                tags: product.tags
+                  ? product.tags.split(",").map((tag) => tag.trim())
+                  : [],
+                images: product.images
+                  ? product.images.split(",").map((img) => img.trim())
+                  : [],
+              }));
 
-          setProducts(validProducts);
+              // Filter out invalid products
+              const validProducts = parsedProducts.filter(
+                (product) =>
+                  product.name &&
+                  product.description &&
+                  product.category &&
+                  product.original_price > 0
+              );
+
+              setProducts(validProducts);
+              setIsLoading(false);
+            },
+            error: (error) => {
+              console.error("Error parsing CSV:", error);
+              setIsLoading(false);
+            },
+          });
+        })
+        .catch((error) => {
+          console.error("Error fetching CSV:", error);
           setIsLoading(false);
-        },
-        error: (error) => {
-          console.error("Error parsing CSV:", error);
-          setIsLoading(false);
-        },
-      });
-    })
-    .catch((error) => {
-      console.error("Error fetching CSV:", error);
-      setIsLoading(false);
-    });
-}, []);
+        });
+    };
+
+    fetchProducts();
+  }, [useBackendData]);
 
 
   // Filter products based on search query, category, and tags
@@ -129,6 +169,31 @@ const Products = () => {
 
   const hasActiveFilters = searchQuery !== '' || selectedCategory !== 'all' || selectedTags.length > 0;
 
+  const handleProductAdded = (newProduct: Product) => {
+    // Add the new product to the current list
+    const transformedProduct = {
+      id: newProduct._id || newProduct.id,
+      name: newProduct.name,
+      description: newProduct.description,
+      original_price: newProduct.price,
+      discounted_price: newProduct.price,
+      category: newProduct.category || 'General',
+      tags: newProduct.tags || [],
+      images: newProduct.image ? [newProduct.image] : [],
+    };
+    
+    setProducts(prev => [transformedProduct, ...prev]);
+    setShowAddProduct(false);
+  };
+
+  const handleAddProductClick = () => {
+    if (isAuthenticated) {
+      setShowAddProduct(true);
+    } else {
+      setShowAuthModal(true);
+    }
+  };
+
   // Show loading state
   if (isLoading) {
     return (
@@ -163,6 +228,63 @@ const Products = () => {
       </section>
 
       <div className="max-w-7xl mx-auto px-3 sm:px-4 lg:px-8">
+        {/* Data Source Toggle and User Actions */}
+        <div className="mb-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-gray-700">Data Source:</span>
+              <Button
+                variant={useBackendData ? "default" : "outline"}
+                size="sm"
+                onClick={() => setUseBackendData(true)}
+              >
+                Backend API
+              </Button>
+              <Button
+                variant={!useBackendData ? "default" : "outline"}
+                size="sm"
+                onClick={() => setUseBackendData(false)}
+              >
+                CSV Data
+              </Button>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-2">
+            {isAuthenticated ? (
+              <>
+                <div className="flex items-center gap-2 text-sm text-gray-600">
+                  <User className="h-4 w-4" />
+                  <span>Welcome, {user?.name}</span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={logout}
+                  className="text-red-600 hover:text-red-700"
+                >
+                  <LogOut className="h-4 w-4 mr-1" />
+                  Logout
+                </Button>
+                <Button
+                  onClick={handleAddProductClick}
+                  className="bg-blue-600 hover:bg-blue-700"
+                >
+                  <Plus className="h-4 w-4 mr-1" />
+                  Add Product
+                </Button>
+              </>
+            ) : (
+              <Button
+                onClick={() => setShowAuthModal(true)}
+                variant="outline"
+              >
+                <User className="h-4 w-4 mr-1" />
+                Login to Add Products
+              </Button>
+            )}
+          </div>
+        </div>
         {/* Enhanced Search Section */}
        <Card className="mb-6 sm:mb-8 border-0 shadow-2xl bg-gradient-to-br from-white to-gray-50/30 backdrop-blur-lg rounded-2xl overflow-hidden">
   <CardContent className="p-0">
@@ -404,6 +526,21 @@ const Products = () => {
           </CardContent>
         </Card>
       </div>
+
+      {/* Modals */}
+      {showAddProduct && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <AddProductForm
+            onProductAdded={handleProductAdded}
+            onClose={() => setShowAddProduct(false)}
+          />
+        </div>
+      )}
+
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+      />
     </div>
   );
 };
